@@ -16,7 +16,7 @@ FILES = {
     "subscriptions": DATA_DIR / "subscriptions.csv",
     "cards": DATA_DIR / "cards.csv",
     "goals": DATA_DIR / "goals.csv",
-    "budgets": DATA_DIR / "budgets.csv",   # NEW
+    "budgets": DATA_DIR / "budgets.csv",
 }
 
 CATEGORIES = ["Income", "Rent", "Food", "Transport", "Shopping", "Bills", "Other"]
@@ -41,13 +41,13 @@ tx_cols    = ["id","date","amount","category","note"]
 sub_cols   = ["id","name","amount","cadence","next_charge_date","category"]
 card_cols  = ["id","name","limit","balance"]
 goal_cols  = ["id","name","target_amount","target_date","current_saved"]
-budget_cols= ["category","monthly_budget"]  # NEW
+budget_cols= ["category","monthly_budget"]
 
-tx     = load_df("transactions", tx_cols)
-subs   = load_df("subscriptions", sub_cols)
-cards  = load_df("cards", card_cols)
-goals  = load_df("goals", goal_cols)
-budgets= load_df("budgets", budget_cols)     # NEW
+tx      = load_df("transactions", tx_cols)
+subs    = load_df("subscriptions", sub_cols)
+cards   = load_df("cards", card_cols)
+goals   = load_df("goals", goal_cols)
+budgets = load_df("budgets", budget_cols)
 
 # -------------------------
 # Helpers
@@ -64,12 +64,15 @@ def safe_category_index(value, options):
     except Exception:
         return max(options.index("Other"), 0)
 
+def next_id(df, col="id"):
+    return int(df[col].max() + 1) if not df.empty else 1
+
 # -------------------------
 # Sidebar navigation
 # -------------------------
 page = st.sidebar.radio(
     "Navigate",
-    ["Dashboard","Transactions","Subscriptions","Cards & Goals","Budgets","Export"]  # NEW: Budgets
+    ["Dashboard","Transactions","Subscriptions","Cards & Goals","Budgets","Export"]
 )
 
 # -------------------------
@@ -88,7 +91,7 @@ if page == "Transactions":
         submitted = st.form_submit_button("Add")
         if submitted:
             new = pd.DataFrame([{
-                "id": (tx["id"].max() + 1) if not tx.empty else 1,
+                "id": next_id(tx),
                 "date": d.isoformat(),
                 "amount": amt,
                 "category": cat,
@@ -101,7 +104,7 @@ if page == "Transactions":
     st.subheader("All Transactions")
     st.dataframe(tx.sort_values("date", ascending=False), use_container_width=True)
 
-    # --- Transaction editor (NEW) ---
+    # --- Transaction editor ---
     st.subheader("Edit / Delete")
     if not tx.empty:
         row_id = st.selectbox("Pick a transaction ID to edit/delete", tx["id"].tolist())
@@ -151,7 +154,7 @@ elif page == "Subscriptions":
         submitted = st.form_submit_button("Add")
         if submitted and name:
             new = pd.DataFrame([{
-                "id": (subs["id"].max() + 1) if not subs.empty else 1,
+                "id": next_id(subs),
                 "name": name,
                 "amount": amount,
                 "cadence": cadence,
@@ -168,7 +171,7 @@ elif page == "Subscriptions":
     upcoming = subs[(up.dt.year==today.year) & (up.dt.month==today.month)] if not subs.empty else subs
     st.dataframe(upcoming, use_container_width=True)
 
-    # NEW: Post this month's subscriptions to Transactions (with regex=False fix)
+    # Post this month's subscriptions to Transactions (regex=False fix)
     st.markdown("### Post this month’s subscriptions to Transactions")
     if not subs.empty:
         if st.button("Add charges to Transactions"):
@@ -181,7 +184,7 @@ elif page == "Subscriptions":
                 if not tx[tx["note"].fillna("").str.contains(marker, regex=False, na=False)].empty:
                     continue
                 new = pd.DataFrame([{
-                    "id": (tx["id"].max() + 1) if not tx.empty else 1,
+                    "id": next_id(tx),
                     "date": date(today.year, today.month, min(28, today.day)).isoformat(),
                     "amount": -abs(float(s["amount"])),
                     "category": s["category"],
@@ -205,7 +208,7 @@ elif page == "Cards & Goals":
         submitted = st.form_submit_button("Add")
         if submitted and nm:
             new = pd.DataFrame([{
-                "id": (cards["id"].max() + 1) if not cards.empty else 1,
+                "id": next_id(cards),
                 "name": nm, "limit": lim, "balance": bal
             }])
             cards = pd.concat([cards, new], ignore_index=True)
@@ -215,12 +218,116 @@ elif page == "Cards & Goals":
     if not cards.empty:
         cards_display = cards.copy()
         # avoid div-by-zero
-        cards_display["utilization"] = (cards_display["balance"] / cards_display["limit"]).replace([pd.NA, pd.NaT], 0).fillna(0)
+        with pd.option_context('mode.use_inf_as_na', True):
+            cards_display["utilization"] = (cards_display["balance"] / cards_display["limit"]).fillna(0)
         st.dataframe(cards_display, use_container_width=True)
+
         total_util = (cards_display["balance"].sum()/cards_display["limit"].sum()) if cards_display["limit"].sum() > 0 else 0
         st.metric("Total Credit Utilization", f"{total_util*100:.1f}%")
         if total_util > 0.3:
             st.warning("Tip: Utilization above 30% can hurt your score. Consider paying down balances before statement close.")
+        else:
+            st.info("Good: Total utilization under 30%.")
+
+        # ===== Card Editor (edit name/limit/balance, or delete) =====
+        st.subheader("Edit / Delete Card")
+        def _fmt(i):
+            row = cards.loc[cards["id"] == i]
+            if row.empty: 
+                return f"ID {i}"
+            nm = str(row["name"].values[0]) if pd.notna(row["name"].values[0]) else f"ID {i}"
+            return f"{nm} (ID {i})"
+
+        card_choice = st.selectbox(
+            "Choose a card to edit",
+            cards["id"].tolist(),
+            format_func=_fmt
+        )
+
+        row = cards[cards["id"] == card_choice].iloc[0]
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            edit_name = st.text_input("Card name", value=str(row["name"]) if pd.notna(row["name"]) else "")
+        with c2:
+            edit_limit = st.number_input(
+                "Credit limit",
+                value=float(row["limit"]) if pd.notna(row["limit"]) else 0.0,
+                step=100.0,
+                format="%.2f"
+            )
+        with c3:
+            edit_balance = st.number_input(
+                "Current balance",
+                value=float(row["balance"]) if pd.notna(row["balance"]) else 0.0,
+                step=50.0,
+                format="%.2f"
+            )
+
+        a, b = st.columns(2)
+        if a.button("Save card changes"):
+            cards.loc[cards["id"] == card_choice, ["name", "limit", "balance"]] = [
+                edit_name, edit_limit, edit_balance
+            ]
+            save_df("cards", cards)
+            st.success("Card updated.")
+            st.rerun()
+
+        if b.button("Delete this card"):
+            cards = cards[cards["id"] != card_choice].reset_index(drop=True)
+            if not cards.empty:
+                cards["id"] = range(1, len(cards) + 1)
+            save_df("cards", cards)
+            st.success("Card deleted.")
+            st.rerun()
+
+        # ===== Record a Payment (updates balance + creates a Transaction) =====
+        st.subheader("Record a Payment")
+        if not cards.empty:
+            pay_card_choice = st.selectbox(
+                "Select a card to pay",
+                cards["id"].tolist(),
+                format_func=_fmt,
+                key="pay_card_choice"
+            )
+            pay_row = cards[cards["id"] == pay_card_choice].iloc[0]
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                pay_date = st.date_input("Payment date", value=date.today(), key="pay_date")
+            with c2:
+                max_pay = float(pay_row["balance"]) if pd.notna(pay_row["balance"]) else 0.0
+                pay_amt = st.number_input(
+                    "Payment amount",
+                    min_value=0.0,
+                    max_value=max(0.0, max_pay),
+                    value=min(50.0, max_pay),
+                    step=10.0,
+                    format="%.2f",
+                    key="pay_amt"
+                )
+            with c3:
+                pay_note = st.text_input("Note (optional)", value="Credit card payment", key="pay_note")
+
+            if st.button("Apply payment"):
+                # 1) Update the card balance (cannot go below zero)
+                new_bal = max(float(pay_row["balance"]) - float(pay_amt), 0.0)
+                cards.loc[cards["id"] == pay_card_choice, "balance"] = new_bal
+                save_df("cards", cards)
+
+                # 2) Create a matching Transaction (cash outflow)
+                marker = f"[ccpay:{pay_row['name']}:{pay_date.year}-{pay_date.month:02d}]"
+                new_tx = pd.DataFrame([{
+                    "id": next_id(tx),
+                    "date": pay_date.isoformat(),
+                    "amount": -abs(float(pay_amt)),   # payment is an outflow
+                    "category": "Bills",
+                    "note": f"CC Payment - {pay_row['name']} {marker} {pay_note}".strip()
+                }])
+                tx = pd.concat([tx, new_tx], ignore_index=True)
+                save_df("transactions", tx)
+
+                st.success(f"Applied ${pay_amt:,.2f} payment to {pay_row['name']}. New balance: ${new_bal:,.2f}")
+                st.rerun()
 
     st.markdown("---")
     st.title("Goals")
@@ -235,7 +342,7 @@ elif page == "Cards & Goals":
         submitted = st.form_submit_button("Add")
         if submitted and gname:
             new = pd.DataFrame([{
-                "id": (goals["id"].max() + 1) if not goals.empty else 1,
+                "id": next_id(goals),
                 "name": gname, "target_amount": tgt,
                 "target_date": gdate.isoformat(), "current_saved": saved
             }])
