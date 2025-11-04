@@ -168,7 +168,7 @@ elif page == "Subscriptions":
     upcoming = subs[(up.dt.year==today.year) & (up.dt.month==today.month)] if not subs.empty else subs
     st.dataframe(upcoming, use_container_width=True)
 
-    # NEW: Post this month's subscriptions to Transactions
+    # NEW: Post this month's subscriptions to Transactions (with regex=False fix)
     st.markdown("### Post this month’s subscriptions to Transactions")
     if not subs.empty:
         if st.button("Add charges to Transactions"):
@@ -177,8 +177,8 @@ elif page == "Subscriptions":
             added = 0
             for _, s in due.iterrows():
                 marker = f"[sub:{s['name']}:{today.year}-{today.month:02d}]"
-                # prevent duplicates by checking note marker
-                if not tx[tx["note"].fillna("").str.contains(marker, na=False)].empty:
+                # prevent duplicates by checking note marker EXACTLY (no regex)
+                if not tx[tx["note"].fillna("").str.contains(marker, regex=False, na=False)].empty:
                     continue
                 new = pd.DataFrame([{
                     "id": (tx["id"].max() + 1) if not tx.empty else 1,
@@ -191,6 +191,7 @@ elif page == "Subscriptions":
                 added += 1
             save_df("transactions", tx)
             st.success(f"Posted {added} subscription charge(s) to Transactions.")
+            st.rerun()
 
 elif page == "Cards & Goals":
     st.title("Credit Cards")
